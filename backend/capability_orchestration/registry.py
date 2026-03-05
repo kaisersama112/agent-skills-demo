@@ -1,8 +1,15 @@
 import os
-import re
 import json
-from typing import Dict, List, Optional, Any
-from .base import Skill, SkillMetadata, InputField, OutputField, SkillResources
+import subprocess
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Any, Tuple
+
+from .base import Skill, SkillMetadata, SkillResources
+
+try:
+    import yaml
+except Exception:
+    yaml = None
 
 try:
     from backend.services.llm_service import LLMService
@@ -10,50 +17,90 @@ except ImportError:
     from services.llm_service import LLMService
 
 
+@dataclass
+class ParsedSkillDocument:
+    metadata: SkillMetadata
+    body: str
+    yaml_header: str
+
+
 class SkillMetadataParser:
     """SKILL.md元数据解析器"""
 
     @staticmethod
     def parse_file(skill_dir: str) -> Optional[SkillMetadata]:
-        """从SKILL.md文件解析元数据"""
         skill_md_path = os.path.join(skill_dir, "SKILL.md")
         if not os.path.exists(skill_md_path):
             return None
 
-        with open(skill_md_path, 'r', encoding='utf-8') as f:
+        with open(skill_md_path, "r", encoding="utf-8") as f:
             content = f.read()
 
         return SkillMetadataParser.parse_content(content)
 
     @staticmethod
     def parse_content(content: str) -> SkillMetadata:
-        """解析SKILL.md内容"""
+        return SkillMetadataParser.parse_content_with_body(content).metadata
+
+    @staticmethod
+    def _split_frontmatter(content: str) -> Tuple[str, str]:
+        normalized = content.lstrip()
+        if not normalized.startswith("---"):
+            return "", content
+
+        lines = normalized.splitlines()
+        if not lines or lines[0].strip() != "---":
+            return "", content
+
+        closing_idx = None
+        for idx in range(1, len(lines)):
+            if lines[idx].strip() == "---":
+                closing_idx = idx
+                break
+
+        if closing_idx is None:
+            return "", content
+
+        header = "\n".join(lines[1:closing_idx])
+        body = "\n".join(lines[closing_idx + 1 :])
+        return header, body
+
+    @staticmethod
+    def _parse_header_to_dict(yaml_header: str) -> Dict[str, Any]:
+        if not yaml_header.strip():
+            return {}
+
+        if yaml:
+            parsed = yaml.safe_load(yaml_header) or {}
+            if isinstance(parsed, dict):
+                return parsed
+
+        metadata_dict: Dict[str, Any] = {}
+        for raw_line in yaml_header.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            metadata_dict[key.strip()] = value.strip().strip('"').strip("'")
+        return metadata_dict
+
+    @staticmethod
+    def parse_content_with_body(content: str) -> ParsedSkillDocument:
+        yaml_header, body = SkillMetadataParser._split_frontmatter(content)
+        metadata_dict = SkillMetadataParser._parse_header_to_dict(yaml_header)
+
         metadata = SkillMetadata(
-            name="unknown",
-            description=""
+            name=metadata_dict.get("name", "unknown"),
+            description=metadata_dict.get("description", ""),
+            version=metadata_dict.get("version", "1.0.0"),
+            license=metadata_dict.get("license"),
         )
 
-        lines = content.split('\n')
-
-        for line in lines:
-            stripped = line.strip()
-
-            if stripped.startswith('---'):
-                continue
-
-            if 'name:' in stripped and metadata.name == "unknown":
-                metadata.name = stripped.split('name:')[1].strip()
-
-            if 'description:' in stripped:
-                metadata.description = stripped.split('description:')[1].strip()
-
-            if 'version:' in stripped:
-                metadata.version = stripped.split('version:')[1].strip()
-
-            if 'license:' in stripped:
-                metadata.license = stripped.split('license:')[1].strip()
-
-        return metadata
+        return ParsedSkillDocument(
+            metadata=metadata,
+            body=body.strip(),
+            yaml_header=yaml_header.strip(),
+        )
 
 
 class SkillRegistry:
@@ -61,101 +108,157 @@ class SkillRegistry:
 
     def __init__(self):
         self.skills: Dict[str, Skill] = {}
-        self.skill_metadata: Dict[str, Dict] = {}
+        self.skill_metadata: Dict[str, Dict[str, Any]] = {}
         self._skill_dirs: Dict[str, str] = {}
+        self._skill_bodies: Dict[str, str] = {}
 
     def register_skill(self, skill: Skill):
-        """注册技能（通过Python对象）"""
         self.skills[skill.name] = skill
-        self.skill_metadata[skill.name] = skill.get_metadata().dict()
+        self.skill_metadata[skill.name] = skill.get_metadata().model_dump()
         print(f"注册技能: {skill.name} - {skill.description}")
 
     def get_skill(self, skill_name: str) -> Optional[Skill]:
-        """获取技能"""
         return self.skills.get(skill_name)
 
+    def get_skill_metadata(self, skill_name: str) -> Optional[Dict[str, Any]]:
+        return self.skill_metadata.get(skill_name)
+
+    def list_all_metadata(self) -> List[Dict[str, Any]]:
+        return list(self.skill_metadata.values())
+
     def list_skills(self) -> List[Dict[str, Any]]:
-        """列出所有技能"""
         result = []
         for name, metadata in self.skill_metadata.items():
             skill_dir = self._skill_dirs.get(name)
             resources_info = self._get_resources_info(skill_dir) if skill_dir else {}
-
-            result.append({
-                "name": metadata.get("name", name),
-                "description": metadata.get("description", ""),
-                "version": metadata.get("version", "1.0.0"),
-                "has_implementation": name in self.skills,
-                "skill_dir": skill_dir,
-                "resources": resources_info
-            })
+            result.append(
+                {
+                    "name": metadata.get("name", name),
+                    "description": metadata.get("description", ""),
+                    "version": metadata.get("version", "1.0.0"),
+                    "has_implementation": name in self.skills,
+                    "skill_dir": skill_dir,
+                    "resources": resources_info,
+                }
+            )
         return result
 
     def _get_resources_info(self, skill_dir: str) -> Dict[str, Any]:
-        """获取技能资源信息"""
         if not skill_dir or not os.path.exists(skill_dir):
             return {}
 
-        info = {}
-        dirs = ["scripts", "templates", "resources", "examples", "assets", "references"]
-
-        for dir_name in dirs:
+        info: Dict[str, Any] = {}
+        for dir_name in ["scripts", "templates", "resources", "examples", "assets", "references"]:
             dir_path = os.path.join(skill_dir, dir_name)
-            if os.path.exists(dir_path):
-                files = []
-                for root, _, filenames in os.walk(dir_path):
-                    for f in filenames:
-                        rel_path = os.path.relpath(os.path.join(root, f), dir_path)
-                        files.append(rel_path)
-                if files:
-                    info[dir_name] = files
+            if not os.path.exists(dir_path):
+                continue
+
+            files: List[str] = []
+            for root, _, filenames in os.walk(dir_path):
+                for filename in filenames:
+                    rel_path = os.path.relpath(os.path.join(root, filename), dir_path)
+                    files.append(rel_path)
+
+            if files:
+                info[dir_name] = sorted(files)
 
         return info
 
-    def get_skill_metadata(self, skill_name: str) -> Optional[Dict]:
-        """获取技能元数据"""
-        return self.skill_metadata.get(skill_name)
-
-    def list_all_metadata(self) -> List[Dict]:
-        """列出所有技能元数据"""
-        return list(self.skill_metadata.values())
-
     def discover_skills(self, skills_dir: str):
-        """自动发现技能目录"""
         if not os.path.exists(skills_dir):
             print(f"技能目录不存在: {skills_dir}")
             return
 
-        for item in os.listdir(skills_dir):
+        for item in sorted(os.listdir(skills_dir)):
             skill_dir = os.path.join(skills_dir, item)
-
             if not os.path.isdir(skill_dir):
                 continue
 
-            metadata = SkillMetadataParser.parse_file(skill_dir)
-            if metadata:
-                skill_name = metadata.name
-                self.skill_metadata[skill_name] = metadata.dict()
-                self._skill_dirs[skill_name] = skill_dir
-                # print(f"发现技能: {skill_name} - {metadata.description}")
+            skill_md_path = os.path.join(skill_dir, "SKILL.md")
+            if not os.path.exists(skill_md_path):
+                continue
+
+            with open(skill_md_path, "r", encoding="utf-8") as f:
+                skill_content = f.read()
+
+            parsed = SkillMetadataParser.parse_content_with_body(skill_content)
+            skill_name = parsed.metadata.name
+
+            self.skill_metadata[skill_name] = parsed.metadata.model_dump()
+            self._skill_dirs[skill_name] = skill_dir
+            self._skill_bodies[skill_name] = self._build_full_skill_body(skill_dir, parsed.body)
+
+    def _build_full_skill_body(self, skill_dir: str, skill_main_body: str) -> str:
+        parts: List[str] = [skill_main_body.strip()] if skill_main_body.strip() else []
+
+        md_files = sorted(
+            file_name
+            for file_name in os.listdir(skill_dir)
+            if file_name.endswith(".md") and file_name != "SKILL.md"
+        )
+
+        for file_name in md_files:
+            file_path = os.path.join(skill_dir, file_name)
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            if content:
+                parts.append(f"## {file_name}\n{content}")
+
+        return "\n\n".join(parts)
+
+    def get_skill_prompt_context(self, skill_name: str) -> str:
+        return self._skill_bodies.get(skill_name, "")
+
+    def build_skills_prompt(self) -> str:
+        sections: List[str] = []
+        for skill_name, metadata in sorted(self.skill_metadata.items()):
+            section = "\n".join(
+                [
+                    f"Skill: {metadata.get('name', skill_name)}",
+                    f"Description: {metadata.get('description', '')}",
+                    self.get_skill_prompt_context(skill_name),
+                ]
+            ).strip()
+            sections.append(section)
+
+        if not sections:
+            return "You have access to the following skills:\n\n(none)"
+
+        return "You have access to the following skills:\n\n" + "\n\n".join(sections)
+
+    def discover_and_register_skills(self, skills_dir: Optional[str] = None):
+        if skills_dir is None:
+            skills_dir = os.path.join(os.path.dirname(__file__), "skills")
+        self.discover_skills(skills_dir)
 
     def get_skill_resources(self, skill_name: str) -> Optional[SkillResources]:
-        """获取技能资源"""
         skill_dir = self._skill_dirs.get(skill_name)
         if not skill_dir:
             return None
-
         return SkillResources(skill_dir)
 
-    def discover_and_register_skills(self, skills_dir: Optional[str] = None):
-        """自动发现并注册所有技能"""
-        if skills_dir is None:
-            skills_dir = os.path.join(os.path.dirname(__file__), "skills")
+    def get_or_create_skill(self, skill_name: str) -> Optional[Skill]:
+        if not skill_name:
+            return None
 
-        self.discover_skills(skills_dir)
+        if skill_name in self.skills:
+            return self.skills[skill_name]
+
+        metadata = self.skill_metadata.get(skill_name)
+        if not metadata:
+            return None
+
+        skill = Skill(
+            name=skill_name,
+            description=metadata.get("description", ""),
+            version=metadata.get("version", "1.0.0"),
+            skill_dir=self._skill_dirs.get(skill_name),
+        )
+        self.skills[skill_name] = skill
+        print(f"创建技能: {skill_name}")
+        return skill
 
     def get_skill_by_intent(self, intent: str) -> Optional[Skill]:
-        """根据意图获取技能（静态映射）"""
         intent_skill_map = {
             "sandbox_app": "sandbox_app",
             "chat": "chat",
@@ -168,54 +271,55 @@ class SkillRegistry:
             "xlsx": "xlsx",
             "theme": "theme-factory",
             "internal_comms": "internal-comms",
-            "brand": "brand-guidelines"
+            "brand": "brand-guidelines",
         }
+        return self.get_or_create_skill(intent_skill_map.get(intent))
 
-        skill_name = intent_skill_map.get(intent)
-        return self.get_or_create_skill(skill_name)
-
-    def get_or_create_skill(self, skill_name: str) -> Optional[Skill]:
-        """获取或创建技能"""
-        if not skill_name:
-            return None
-
-        # 检查是否已存在
-        if skill_name in self.skills:
-            return self.skills[skill_name]
-
-        # 检查元数据是否存在
-        if skill_name not in self.skill_metadata:
-            return None
-
-        # 创建新的技能实例
-        metadata = self.skill_metadata[skill_name]
+    def execute_skill_action(self, skill_name: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Skill Runtime: 把 action/operation 映射到 scripts/<action>.py 并执行。"""
         skill_dir = self._skill_dirs.get(skill_name)
+        if not skill_dir:
+            return {"status": "error", "message": f"技能不存在: {skill_name}"}
 
-        skill = Skill(
-            name=skill_name,
-            description=metadata.get("description", ""),
-            version=metadata.get("version", "1.0.0"),
-            skill_dir=skill_dir
+        action = input_data.get("action") or input_data.get("operation")
+        if not action:
+            return {"status": "error", "message": "缺少 action 或 operation"}
+
+        script_path = os.path.join(skill_dir, "scripts", f"{action}.py")
+        if not os.path.exists(script_path):
+            return {
+                "status": "error",
+                "message": f"脚本不存在: scripts/{action}.py",
+                "skill": skill_name,
+                "action": action,
+            }
+
+        process = subprocess.run(
+            ["python", script_path],
+            input=json.dumps(input_data, ensure_ascii=False),
+            text=True,
+            capture_output=True,
+            cwd=skill_dir,
         )
 
-        # 注册技能
-        self.skills[skill_name] = skill
-        print(f"创建技能: {skill_name}")
-
-        return skill
+        return {
+            "status": "success" if process.returncode == 0 else "failed",
+            "skill": skill_name,
+            "action": action,
+            "script": f"scripts/{action}.py",
+            "returncode": process.returncode,
+            "stdout": process.stdout,
+            "stderr": process.stderr,
+        }
 
     async def select_skill_by_llm(self, user_input: str) -> Optional[Skill]:
-        """使用LLM进行意图识别并选择技能"""
         if not self.skill_metadata:
             return None
 
-        skill_list = []
-        for name, metadata in self.skill_metadata.items():
-            skill_list.append({
-                "name": metadata.get("name", name),
-                "description": metadata.get("description", "")
-            })
-
+        skill_list = [
+            {"name": m.get("name", n), "description": m.get("description", "")}
+            for n, m in self.skill_metadata.items()
+        ]
         skills_json = json.dumps(skill_list, ensure_ascii=False, indent=2)
 
         prompt = f"""
@@ -242,5 +346,4 @@ class SkillRegistry:
         if selected_skill_name.lower() == "none":
             return None
 
-        # 获取或创建技能
         return self.get_or_create_skill(selected_skill_name)

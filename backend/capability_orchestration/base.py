@@ -374,8 +374,7 @@ class Skill:
         if not self.reference_loader:
             return ""
 
-        skill_md_path = os.path.join(self.skill_dir, "SKILL.md")
-        return self.reference_loader.get_full_context(skill_md_path)
+        return self.reference_loader.get_full_context("SKILL.md")
 
     def get_skill_instructions(self) -> str:
         """获取技能指令（SKILL.md主体内容）"""
@@ -387,13 +386,13 @@ class Skill:
         if not self.reference_loader:
             return []
 
-        skill_md_path = os.path.join(self.skill_dir, "SKILL.md")
-        return self.reference_loader.list_referenced_files(skill_md_path)
+        return self.reference_loader.list_referenced_files("SKILL.md")
 
     async def execute(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """执行技能"""
         if self.execute_handler:
             return await self.execute_handler(input_data)
+
         # 默认实现：返回技能信息
         return {
             "skill_name": self.name,
@@ -401,6 +400,7 @@ class Skill:
             "input_data": input_data,
             "message": "技能执行成功（默认实现）"
         }
+
 
     def get_script(self, name: str) -> Optional[str]:
         """获取脚本内容"""

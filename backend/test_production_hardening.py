@@ -81,6 +81,21 @@ class ProductionHardeningTests(unittest.TestCase):
         self.assertFalse(first.json()["idempotency"]["hit"])
         self.assertTrue(second.json()["idempotency"]["hit"])
 
+
+    def test_idempotency_cache_eviction(self):
+        original_size = chat_api.settings.idempotency_cache_size
+        chat_api.settings.idempotency_cache_size = 2
+        chat_api._IDEMPOTENCY_CACHE.clear()
+        try:
+            self.client.post("/chat/sendMessage", params={"session_id": "s-evict", "message": "m1", "idempotency_key": "k1"})
+            self.client.post("/chat/sendMessage", params={"session_id": "s-evict", "message": "m2", "idempotency_key": "k2"})
+            self.client.post("/chat/sendMessage", params={"session_id": "s-evict", "message": "m3", "idempotency_key": "k3"})
+            self.assertEqual(len(chat_api._IDEMPOTENCY_CACHE), 2)
+            self.assertNotIn(("s-evict", "k1"), chat_api._IDEMPOTENCY_CACHE)
+        finally:
+            chat_api.settings.idempotency_cache_size = original_size
+            chat_api._IDEMPOTENCY_CACHE.clear()
+
     def test_trace_header_roundtrip(self):
         resp = self.client.get("/health", headers={"X-Trace-Id": "trace-test-1"})
         self.assertEqual(resp.status_code, 200)

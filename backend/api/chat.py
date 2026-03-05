@@ -1,3 +1,4 @@
+from collections import OrderedDict
 from datetime import datetime
 import hashlib
 import json
@@ -6,6 +7,7 @@ from typing import Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
+from config.config import settings
 from core.chat_orchestrator import chat_orchestrator
 from models.chat import ChatMessage, ChatSession, MessageType
 from models.database import get_db
@@ -13,7 +15,7 @@ from models.database import get_db
 router = APIRouter()
 
 # 简易幂等缓存（进程内，生产可替换 Redis）
-_IDEMPOTENCY_CACHE: Dict[Tuple[str, str], Dict] = {}
+_IDEMPOTENCY_CACHE: "OrderedDict[Tuple[str, str], Dict]" = OrderedDict()
 
 
 def _safe_message_type(response_type: str) -> MessageType:
@@ -49,6 +51,15 @@ def _resolve_idempotency_key(session_id: str, message: str, explicit_key: Option
         return explicit_key
     digest = hashlib.sha1(f"{session_id}:{message}".encode("utf-8")).hexdigest()
     return f"auto:{digest}"
+
+
+def _cache_response(cache_key: Tuple[str, str], response: Dict) -> None:
+    _IDEMPOTENCY_CACHE[cache_key] = response
+    _IDEMPOTENCY_CACHE.move_to_end(cache_key)
+
+    max_size = max(1, settings.idempotency_cache_size)
+    while len(_IDEMPOTENCY_CACHE) > max_size:
+        _IDEMPOTENCY_CACHE.popitem(last=False)
 
 
 @router.post("/queryHistoryChatContent.json")
@@ -108,6 +119,7 @@ async def send_message(
     cache_key = (session_id, dedupe_key)
     if cache_key in _IDEMPOTENCY_CACHE:
         cached = _IDEMPOTENCY_CACHE[cache_key]
+        _IDEMPOTENCY_CACHE.move_to_end(cache_key)
         return {
             "success": True,
             "data": cached,
@@ -144,7 +156,7 @@ async def send_message(
 
     db.commit()
 
-    _IDEMPOTENCY_CACHE[cache_key] = response
+    _cache_response(cache_key, response)
 
     return {
         "success": True,

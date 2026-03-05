@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     def executor_retryable_error_codes_set(self) -> set[str]:
         return {x.strip() for x in self.executor_retryable_error_codes.split(",") if x.strip()}
 
+    idempotency_cache_size: int = 1000
+
     # 安全配置
     secret_key: str = "change_me_in_env"
     algorithm: str = "HS256"

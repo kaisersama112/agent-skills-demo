@@ -334,7 +334,7 @@ class SkillRegistry:
                 "message": f"脚本执行超时（{timeout_seconds}s）",
             }
 
-        return {
+        result = {
             "status": "success" if process.returncode == 0 else "failed",
             "skill": skill_name,
             "action": action,
@@ -343,6 +343,10 @@ class SkillRegistry:
             "stdout": process.stdout,
             "stderr": process.stderr,
         }
+        if process.returncode != 0:
+            result["error_code"] = "script_failed"
+            result["message"] = f"脚本执行失败，退出码 {process.returncode}"
+        return result
 
     async def select_skill_by_llm(self, user_input: str) -> Optional[Skill]:
         if not self.skill_metadata:

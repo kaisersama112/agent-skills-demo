@@ -9,10 +9,10 @@
 - [x] 会话上下文接入主链路（带 recent history）
 - [ ] 多轮上下文摘要（压缩历史，控制 token）
 - [ ] Planner/Executor 增加 step 级循环（plan -> execute -> observe -> replan）
-- [ ] 幂等键（session_id + message_id）防重复执行
+- [x] 幂等键（session_id + idempotency_key）防重复执行（进程内缓存版）
 
 ### 执行可靠性
-- [ ] 脚本执行重试策略（可配置重试次数 + 退避）
+- [x] 脚本执行重试策略（可配置重试次数 + 退避）
 - [ ] 统一超时策略（planner/executor/script 分层）
 - [ ] 失败补偿策略（回滚或补偿动作）
 - [ ] 执行队列与并发上限
@@ -26,12 +26,12 @@
 ### API 与错误契约
 - [x] response type 兜底映射（非法 type 自动降级 JSON）
 - [x] 统一 trace_id 透传到响应
-- [ ] 全局异常中间件（标准 error schema）
+- [x] 全局异常中间件（标准 error schema）
 - [ ] 对外错误码文档
 
 ### 可观测性
 - [x] trace_id 基础打点
-- [ ] 结构化日志（plan/execution/latency）
+- [x] 结构化日志（plan/execution/latency）
 - [ ] 指标埋点（成功率、超时率、平均耗时）
 - [ ] 审计日志（脚本执行输入输出摘要）
 

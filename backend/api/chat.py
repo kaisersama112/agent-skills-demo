@@ -1,14 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
-from typing import List, Optional
-from models.database import get_db
-from models.chat import ChatSession, ChatMessage, MessageType
-from core.chat_orchestrator import chat_orchestrator
-import json
 from datetime import datetime
+import hashlib
+import json
+from typing import Dict, List, Optional, Tuple
+
+from fastapi import APIRouter, Depends, Query, Request
+from sqlalchemy.orm import Session
+
+from core.chat_orchestrator import chat_orchestrator
+from models.chat import ChatMessage, ChatSession, MessageType
+from models.database import get_db
 
 router = APIRouter()
 
+# 简易幂等缓存（进程内，生产可替换 Redis）
+_IDEMPOTENCY_CACHE: Dict[Tuple[str, str], Dict] = {}
 
 
 def _safe_message_type(response_type: str) -> MessageType:
@@ -28,101 +33,122 @@ def _build_recent_history(db: Session, session_id: str, limit: int = 8) -> List[
     )
     items = []
     for msg in reversed(messages):
-        items.append({
-            "sender": msg.sender,
-            "type": msg.message_type.value,
-            "content": msg.content,
-            "created_at": msg.created_at.isoformat(),
-        })
+        items.append(
+            {
+                "sender": msg.sender,
+                "type": msg.message_type.value,
+                "content": msg.content,
+                "created_at": msg.created_at.isoformat(),
+            }
+        )
     return items
+
+
+def _resolve_idempotency_key(session_id: str, message: str, explicit_key: Optional[str]) -> str:
+    if explicit_key:
+        return explicit_key
+    digest = hashlib.sha1(f"{session_id}:{message}".encode("utf-8")).hexdigest()
+    return f"auto:{digest}"
 
 
 @router.post("/queryHistoryChatContent.json")
 async def query_chat_history(
     session_id: str = Query(...),
     latestTime: Optional[str] = Query(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """查询聊天历史"""
-    # 查找或创建会话
     session = db.query(ChatSession).filter(ChatSession.session_id == session_id).first()
     if not session:
         session = ChatSession(session_id=session_id)
         db.add(session)
         db.commit()
         db.refresh(session)
-    
-    # 查询消息
+
     query = db.query(ChatMessage).filter(ChatMessage.session_id == session_id)
-    
-    # 如果指定了latestTime，则只返回更新的消息
+
     if latestTime:
         latest_time = datetime.fromisoformat(latestTime)
         query = query.filter(ChatMessage.created_at > latest_time)
-    
+
     messages = query.order_by(ChatMessage.created_at).all()
-    
-    # 构建响应
+
     result = []
     for msg in messages:
-        result.append({
-            "id": msg.id,
-            "type": msg.message_type.value,
-            "content": msg.content,
-            "sender": msg.sender,
-            "createdAt": msg.created_at.isoformat()
-        })
-    
-    return {
-        "success": True,
-        "data": result,
-        "timestamp": datetime.utcnow().isoformat()
-    }
+        result.append(
+            {
+                "id": msg.id,
+                "type": msg.message_type.value,
+                "content": msg.content,
+                "sender": msg.sender,
+                "createdAt": msg.created_at.isoformat(),
+            }
+        )
+
+    return {"success": True, "data": result, "timestamp": datetime.utcnow().isoformat()}
 
 
 @router.post("/sendMessage")
 async def send_message(
+    request: Request,
     session_id: str,
     message: str,
-    db: Session = Depends(get_db)
+    idempotency_key: Optional[str] = None,
+    db: Session = Depends(get_db),
 ):
     """发送消息"""
-    # 查找或创建会话
     session = db.query(ChatSession).filter(ChatSession.session_id == session_id).first()
     if not session:
         session = ChatSession(session_id=session_id)
         db.add(session)
         db.commit()
         db.refresh(session)
-    
-    # 保存用户消息
+
+    dedupe_key = _resolve_idempotency_key(session_id, message, idempotency_key)
+    cache_key = (session_id, dedupe_key)
+    if cache_key in _IDEMPOTENCY_CACHE:
+        cached = _IDEMPOTENCY_CACHE[cache_key]
+        return {
+            "success": True,
+            "data": cached,
+            "idempotency": {"key": dedupe_key, "hit": True},
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
     user_message = ChatMessage(
         session_id=session_id,
         message_type=MessageType.TEXT,
         content=message,
-        sender="user"
+        sender="user",
     )
     db.add(user_message)
-    
-    # 处理消息
+
+    inbound_trace_id = request.headers.get("X-Trace-Id", "")
     context = {"history": _build_recent_history(db, session_id)}
+    if inbound_trace_id:
+        context["trace_id"] = inbound_trace_id
+
     response = await chat_orchestrator.handle_message(session_id, message, context=context)
 
-    # 保存系统回复
     response_type = response.get("type", "json")
     message_type = _safe_message_type(response_type)
     system_message = ChatMessage(
         session_id=session_id,
         message_type=message_type,
-        content=json.dumps(response, ensure_ascii=False) if message_type != MessageType.TEXT else response.get("content", ""),
-        sender="system"
+        content=json.dumps(response, ensure_ascii=False)
+        if message_type != MessageType.TEXT
+        else response.get("content", ""),
+        sender="system",
     )
     db.add(system_message)
-    
+
     db.commit()
-    
+
+    _IDEMPOTENCY_CACHE[cache_key] = response
+
     return {
         "success": True,
         "data": response,
-        "timestamp": datetime.utcnow().isoformat()
+        "idempotency": {"key": dedupe_key, "hit": False},
+        "timestamp": datetime.utcnow().isoformat(),
     }

@@ -5,7 +5,7 @@ from typing import Any, Dict
 class StructuredResponseRenderer:
     """结构化响应层：统一 API 响应格式。"""
 
-    def render(self, user_input: str, plan: Dict[str, Any], execution: Dict[str, Any]) -> Dict[str, Any]:
+    def render(self, user_input: str, plan: Dict[str, Any], execution: Dict[str, Any], trace_id: str = "") -> Dict[str, Any]:
         status = execution.get("status")
         response_type = "json"
 
@@ -15,9 +15,11 @@ class StructuredResponseRenderer:
                 "content": {
                     "status": status,
                     "message": execution.get("message") or "执行失败",
+                    "error_code": execution.get("error_code", "execution_error"),
                     "user_input": user_input,
                     "plan": plan,
                     "execution": execution,
+                    "trace_id": trace_id,
                 },
                 "timestamp": datetime.utcnow().isoformat(),
             }
@@ -29,6 +31,7 @@ class StructuredResponseRenderer:
                 "user_input": user_input,
                 "plan": plan,
                 "execution": execution,
+                "trace_id": trace_id,
             },
             "timestamp": datetime.utcnow().isoformat(),
         }

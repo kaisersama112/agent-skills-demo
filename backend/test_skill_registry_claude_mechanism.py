@@ -89,6 +89,54 @@ body
             self.assertEqual(result["status"], "success")
             self.assertIn('"x": 1', result["stdout"])
 
+    def test_execute_skill_action_rejects_invalid_action(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = os.path.join(tmp, "demo")
+            os.makedirs(skill_dir)
+
+            with open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as f:
+                f.write("""---
+name: demo
+description: demo
+---
+body
+""")
+
+            registry = SkillRegistry()
+            registry.discover_skills(tmp)
+            result = registry.execute_skill_action("demo", {"action": "../../evil"})
+
+            self.assertEqual(result["status"], "error")
+            self.assertEqual(result["error_code"], "invalid_action")
+
+    def test_execute_skill_action_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = os.path.join(tmp, "demo")
+            scripts_dir = os.path.join(skill_dir, "scripts")
+            os.makedirs(scripts_dir)
+
+            with open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as f:
+                f.write("""---
+name: demo
+description: demo
+---
+body
+""")
+
+            with open(os.path.join(scripts_dir, "slow.py"), "w", encoding="utf-8") as f:
+                f.write(
+                    "import time\n"
+                    "time.sleep(2)\n"
+                    "print('done')\n"
+                )
+
+            registry = SkillRegistry()
+            registry.discover_skills(tmp)
+            result = registry.execute_skill_action("demo", {"action": "slow", "timeout_seconds": 1})
+
+            self.assertEqual(result["status"], "error")
+            self.assertEqual(result["error_code"], "script_timeout")
+
 
 if __name__ == "__main__":
     unittest.main()

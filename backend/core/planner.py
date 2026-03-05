@@ -1,5 +1,6 @@
 import json
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict, List
 
 from capability_orchestration import skill_registry
 from services.llm_service import llm_service
@@ -8,8 +9,12 @@ from services.llm_service import llm_service
 class LLMPlanner:
     """LLM 决策层：将用户输入规划为 skill/action/input。"""
 
-    async def plan(self, user_input: str) -> Dict[str, Any]:
+    ACTION_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
+
+    async def plan(self, user_input: str, context: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        context = context or {}
         skills_prompt = skill_registry.build_skills_prompt()
+        history_prompt = self._build_history_prompt(context.get("history", []))
 
         prompt = f"""
 你是一个技能规划器。请根据用户请求和可用技能，输出一个 JSON 对象。
@@ -25,6 +30,7 @@ class LLMPlanner:
 }}
 
 用户请求：{user_input}
+{history_prompt}
 """
 
         try:
@@ -32,14 +38,23 @@ class LLMPlanner:
             parsed = self._parse_json_block(response)
             if not isinstance(parsed, dict):
                 raise ValueError("planner output is not json object")
-            return {
-                "skill": str(parsed.get("skill", "none")).strip(),
-                "action": str(parsed.get("action", "")).strip(),
-                "input": parsed.get("input", {"user_input": user_input}),
-                "reason": str(parsed.get("reason", "")),
-            }
+            return self._normalize_plan(parsed, user_input)
         except Exception:
             return await self._fallback_plan(user_input)
+
+    def _build_history_prompt(self, history: List[Dict[str, Any]]) -> str:
+        if not history:
+            return ""
+
+        recent = history[-6:]
+        lines = ["最近对话上下文（按时间升序）："]
+        for item in recent:
+            sender = item.get("sender", "unknown")
+            content = str(item.get("content", "")).strip()
+            if not content:
+                continue
+            lines.append(f"- {sender}: {content[:300]}")
+        return "\n".join(lines)
 
     async def _fallback_plan(self, user_input: str) -> Dict[str, Any]:
         skill = await skill_registry.select_skill_by_llm(user_input)
@@ -65,3 +80,30 @@ class LLMPlanner:
             text = text[4:].strip()
 
         return json.loads(text)
+
+    def _normalize_plan(self, raw: Dict[str, Any], user_input: str) -> Dict[str, Any]:
+        skill_name = str(raw.get("skill", "none")).strip() or "none"
+        action = str(raw.get("action", "")).strip()
+        payload = raw.get("input")
+        reason = str(raw.get("reason", "")).strip()
+
+        if not isinstance(payload, dict):
+            payload = {"user_input": user_input}
+
+        payload.setdefault("user_input", user_input)
+
+        if skill_name != "none" and not skill_registry.get_skill_metadata(skill_name):
+            skill_name = "none"
+            action = ""
+            reason = (reason + " | unknown skill downgraded to none").strip(" |")
+
+        if action and not self.ACTION_PATTERN.fullmatch(action):
+            action = ""
+            reason = (reason + " | invalid action ignored").strip(" |")
+
+        return {
+            "skill": skill_name,
+            "action": action,
+            "input": payload,
+            "reason": reason,
+        }

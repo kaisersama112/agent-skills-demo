@@ -1,5 +1,7 @@
 import os
 import json
+import re
+import sys
 import subprocess
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any, Tuple
@@ -105,6 +107,10 @@ class SkillMetadataParser:
 
 class SkillRegistry:
     """技能注册表 - 通过SKILL.md自动发现技能"""
+
+    ACTION_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
+    DEFAULT_SCRIPT_TIMEOUT_SECONDS = 20
+    MAX_SCRIPT_TIMEOUT_SECONDS = 120
 
     def __init__(self):
         self.skills: Dict[str, Skill] = {}
@@ -279,30 +285,56 @@ class SkillRegistry:
         """Skill Runtime: 把 action/operation 映射到 scripts/<action>.py 并执行。"""
         skill_dir = self._skill_dirs.get(skill_name)
         if not skill_dir:
-            return {"status": "error", "message": f"技能不存在: {skill_name}"}
+            return {"status": "error", "error_code": "skill_not_found", "message": f"技能不存在: {skill_name}"}
 
         action = input_data.get("action") or input_data.get("operation")
         if not action:
-            return {"status": "error", "message": "缺少 action 或 operation"}
+            return {"status": "error", "error_code": "missing_action", "message": "缺少 action 或 operation"}
 
-        script_path = os.path.join(skill_dir, "scripts", f"{action}.py")
+        if not isinstance(action, str) or not self.ACTION_PATTERN.fullmatch(action):
+            return {"status": "error", "error_code": "invalid_action", "message": f"非法 action: {action}"}
+
+        scripts_dir = os.path.abspath(os.path.join(skill_dir, "scripts"))
+        script_path = os.path.abspath(os.path.join(scripts_dir, f"{action}.py"))
+        if not script_path.startswith(f"{scripts_dir}{os.sep}"):
+            return {"status": "error", "error_code": "path_violation", "message": "脚本路径校验失败"}
+
         if not os.path.exists(script_path):
             return {
                 "status": "error",
+                "error_code": "script_not_found",
                 "message": f"脚本不存在: scripts/{action}.py",
                 "skill": skill_name,
                 "action": action,
             }
 
-        process = subprocess.run(
-            ["python", script_path],
-            input=json.dumps(input_data, ensure_ascii=False),
-            text=True,
-            capture_output=True,
-            cwd=skill_dir,
-        )
+        timeout_seconds = self.DEFAULT_SCRIPT_TIMEOUT_SECONDS
+        if isinstance(input_data.get("timeout_seconds"), int):
+            timeout_seconds = max(1, min(self.MAX_SCRIPT_TIMEOUT_SECONDS, input_data["timeout_seconds"]))
 
-        return {
+        try:
+            process = subprocess.run(
+                [sys.executable, script_path],
+                input=json.dumps(input_data, ensure_ascii=False),
+                text=True,
+                capture_output=True,
+                cwd=skill_dir,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return {
+                "status": "error",
+                "error_code": "script_timeout",
+                "skill": skill_name,
+                "action": action,
+                "script": f"scripts/{action}.py",
+                "timeout_seconds": timeout_seconds,
+                "stdout": exc.stdout or "",
+                "stderr": exc.stderr or "",
+                "message": f"脚本执行超时（{timeout_seconds}s）",
+            }
+
+        result = {
             "status": "success" if process.returncode == 0 else "failed",
             "skill": skill_name,
             "action": action,
@@ -311,6 +343,10 @@ class SkillRegistry:
             "stdout": process.stdout,
             "stderr": process.stderr,
         }
+        if process.returncode != 0:
+            result["error_code"] = "script_failed"
+            result["message"] = f"脚本执行失败，退出码 {process.returncode}"
+        return result
 
     async def select_skill_by_llm(self, user_input: str) -> Optional[Skill]:
         if not self.skill_metadata:

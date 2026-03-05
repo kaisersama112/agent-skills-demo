@@ -3,7 +3,7 @@
 ## Setup & Basic Structure
 
 ```javascript
-const pptxgen = require("pptxgenjs");
+const pptxgen = require("capability_orchestration/skills/pptx/pptxgenjs");
 
 let pres = new pptxgen();
 pres.layout = 'LAYOUT_16x9';  // or 'LAYOUT_16x10', 'LAYOUT_4x3', 'LAYOUT_WIDE'
@@ -11,9 +11,9 @@ pres.author = 'Your Name';
 pres.title = 'Presentation Title';
 
 let slide = pres.addSlide();
-slide.addText("Hello World!", { x: 0.5, y: 0.5, fontSize: 36, color: "363636" });
+slide.addText("Hello World!", {x: 0.5, y: 0.5, fontSize: 36, color: "363636"});
 
-pres.writeFile({ fileName: "Presentation.pptx" });
+pres.writeFile({fileName: "Presentation.pptx"});
 ```
 
 ## Layout Dimensions

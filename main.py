@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api import api_router
-from config.config import settings
+from configs.config import settings
 from core.telemetry import log_event
 
 # 创建FastAPI应用
@@ -109,6 +109,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8000,
+        port=8001,
         reload=settings.debug,
     )

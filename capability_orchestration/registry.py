@@ -14,7 +14,7 @@ except Exception:
     yaml = None
 
 try:
-    from backend.services.llm_service import LLMService
+    from services.llm_service import LLMService
 except ImportError:
     from services.llm_service import LLMService
 
@@ -64,7 +64,7 @@ class SkillMetadataParser:
             return "", content
 
         header = "\n".join(lines[1:closing_idx])
-        body = "\n".join(lines[closing_idx + 1 :])
+        body = "\n".join(lines[closing_idx + 1:])
         return header, body
 
     @staticmethod
@@ -282,7 +282,7 @@ class SkillRegistry:
         return self.get_or_create_skill(intent_skill_map.get(intent))
 
     def execute_skill_action(self, skill_name: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Skill Runtime: 把 action/operation 映射到 scripts/<action>.py 并执行。"""
+        """Skill Runtime: 把 action/operation 映射到 scripts/<action> 并执行。"""
         skill_dir = self._skill_dirs.get(skill_name)
         if not skill_dir:
             return {"status": "error", "error_code": "skill_not_found", "message": f"技能不存在: {skill_name}"}
@@ -291,11 +291,18 @@ class SkillRegistry:
         if not action:
             return {"status": "error", "error_code": "missing_action", "message": "缺少 action 或 operation"}
 
-        if not isinstance(action, str) or not self.ACTION_PATTERN.fullmatch(action):
+        # Remove .py extension if present
+        if action.endswith(".py"):
+            action = action[:-3]
+
+        # Validate action pattern
+        if not isinstance(action, str):
             return {"status": "error", "error_code": "invalid_action", "message": f"非法 action: {action}"}
 
         scripts_dir = os.path.abspath(os.path.join(skill_dir, "scripts"))
         script_path = os.path.abspath(os.path.join(scripts_dir, f"{action}.py"))
+        
+        # Check if script path is within scripts directory
         if not script_path.startswith(f"{scripts_dir}{os.sep}"):
             return {"status": "error", "error_code": "path_violation", "message": "脚本路径校验失败"}
 

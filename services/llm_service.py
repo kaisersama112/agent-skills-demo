@@ -1,22 +1,22 @@
 import httpx
 import asyncio
 from typing import Optional, Dict, Any, List
-from config.config import settings
+from configs.config import settings
 
 
 class LLMService:
     """LLM服务"""
-    
+
     def __init__(self):
-        self.api_key = settings.llm_api_key
-        self.base_url = settings.llm_base_url
-        self.default_model = settings.llm_model
+        self.api_key = settings.openai_config.api_key
+        self.base_url = settings.openai_config.endpoint
+        self.default_model = settings.openai_config.model_name
         self.client = httpx.AsyncClient(timeout=60.0)
-    
+
     async def generate(self, prompt: str, model: Optional[str] = None, **kwargs) -> str:
         """生成文本"""
         model = model or self.default_model
-        
+
         payload = {
             "model": model,
             "messages": [
@@ -27,12 +27,12 @@ class LLMService:
             "max_tokens": kwargs.get("max_tokens", 2000),
             **kwargs
         }
-        
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        
+
         # 重试机制
         for attempt in range(3):
             try:
@@ -42,7 +42,7 @@ class LLMService:
                     headers=headers
                 )
                 response.raise_for_status()
-                
+
                 result = response.json()
                 return result["choices"][0]["message"]["content"]
             except httpx.HTTPError as e:
@@ -50,7 +50,7 @@ class LLMService:
                     raise
                 await asyncio.sleep(2 ** attempt)
                 continue
-    
+
     async def generate_html_app(self, user_input: str) -> str:
         """生成HTML应用"""
         prompt = f"""
@@ -71,18 +71,18 @@ class LLMService:
 完整的HTML代码
 ```
         """
-        
+
         response = await self.generate(prompt)
-        
+
         # 提取HTML代码
         if "```html" in response:
             html_start = response.find("```html") + 7
             html_end = response.find("```", html_start)
             if html_end != -1:
                 return response[html_start:html_end].strip()
-        
+
         return response
-    
+
     async def classify_intent(self, user_input: str) -> str:
         """分类用户意图"""
         prompt = f"""
@@ -96,10 +96,10 @@ class LLMService:
 
 请只返回意图名称，不要返回其他内容。
         """
-        
+
         response = await self.generate(prompt, temperature=0.0)
         return response.strip()
-    
+
     async def close(self):
         """关闭客户端"""
         await self.client.aclose()

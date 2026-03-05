@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
-from config.config import settings
+from configs.config import settings
 from core.chat_orchestrator import chat_orchestrator
 from models.chat import ChatMessage, ChatSession, MessageType
 from models.database import get_db

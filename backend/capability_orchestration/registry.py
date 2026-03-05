@@ -1,6 +1,7 @@
 import os
 import re
 import json
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
 from .base import Skill, SkillMetadata, InputField, OutputField, SkillResources
 
@@ -28,32 +29,47 @@ class SkillMetadataParser:
     @staticmethod
     def parse_content(content: str) -> SkillMetadata:
         """解析SKILL.md内容"""
-        metadata = SkillMetadata(
-            name="unknown",
-            description=""
-        )
+        parsed = SkillMetadataParser.parse_content_with_body(content)
+        return parsed.metadata
 
-        lines = content.split('\n')
+    @staticmethod
+    def parse_content_with_body(content: str) -> "ParsedSkillDocument":
+        """解析SKILL.md中的YAML头和正文"""
+        yaml_header = ""
+        body = content
 
-        for line in lines:
-            stripped = line.strip()
+        if content.startswith('---'):
+            parts = content.split('---', 2)
+            if len(parts) == 3:
+                _, yaml_header, body = parts
 
-            if stripped.startswith('---'):
+        metadata_dict: Dict[str, str] = {}
+        for line in yaml_header.splitlines():
+            if ':' not in line:
                 continue
 
-            if 'name:' in stripped and metadata.name == "unknown":
-                metadata.name = stripped.split('name:')[1].strip()
+            key, value = line.split(':', 1)
+            metadata_dict[key.strip()] = value.strip().strip('"').strip("'")
 
-            if 'description:' in stripped:
-                metadata.description = stripped.split('description:')[1].strip()
+        metadata = SkillMetadata(
+            name=metadata_dict.get("name", "unknown"),
+            description=metadata_dict.get("description", ""),
+            version=metadata_dict.get("version", "1.0.0"),
+            license=metadata_dict.get("license")
+        )
 
-            if 'version:' in stripped:
-                metadata.version = stripped.split('version:')[1].strip()
+        return ParsedSkillDocument(
+            metadata=metadata,
+            body=body.strip(),
+            yaml_header=yaml_header.strip()
+        )
 
-            if 'license:' in stripped:
-                metadata.license = stripped.split('license:')[1].strip()
 
-        return metadata
+@dataclass
+class ParsedSkillDocument:
+    metadata: SkillMetadata
+    body: str
+    yaml_header: str
 
 
 class SkillRegistry:
@@ -63,6 +79,7 @@ class SkillRegistry:
         self.skills: Dict[str, Skill] = {}
         self.skill_metadata: Dict[str, Dict] = {}
         self._skill_dirs: Dict[str, str] = {}
+        self._skill_bodies: Dict[str, str] = {}
 
     def register_skill(self, skill: Skill):
         """注册技能（通过Python对象）"""
@@ -132,12 +149,59 @@ class SkillRegistry:
             if not os.path.isdir(skill_dir):
                 continue
 
-            metadata = SkillMetadataParser.parse_file(skill_dir)
-            if metadata:
-                skill_name = metadata.name
-                self.skill_metadata[skill_name] = metadata.dict()
-                self._skill_dirs[skill_name] = skill_dir
-                # print(f"发现技能: {skill_name} - {metadata.description}")
+            skill_md_path = os.path.join(skill_dir, "SKILL.md")
+            if not os.path.exists(skill_md_path):
+                continue
+
+            with open(skill_md_path, 'r', encoding='utf-8') as f:
+                skill_content = f.read()
+
+            parsed = SkillMetadataParser.parse_content_with_body(skill_content)
+            metadata = parsed.metadata
+            skill_name = metadata.name
+
+            self.skill_metadata[skill_name] = metadata.dict()
+            self._skill_dirs[skill_name] = skill_dir
+            self._skill_bodies[skill_name] = self._build_full_skill_body(skill_dir, parsed.body)
+
+    def _build_full_skill_body(self, skill_dir: str, skill_main_body: str) -> str:
+        """构建Claude Skills风格的聚合上下文（SKILL.md + 其他.md）"""
+        parts = [skill_main_body.strip()] if skill_main_body.strip() else []
+
+        markdown_files = sorted(
+            file_name
+            for file_name in os.listdir(skill_dir)
+            if file_name.endswith('.md') and file_name != 'SKILL.md'
+        )
+
+        for file_name in markdown_files:
+            file_path = os.path.join(skill_dir, file_name)
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+            if not content:
+                continue
+
+            parts.append(f"## {file_name}\n{content}")
+
+        return "\n\n".join(parts)
+
+    def get_skill_prompt_context(self, skill_name: str) -> str:
+        """获取用于Prompt注入的技能内容"""
+        return self._skill_bodies.get(skill_name, "")
+
+    def build_skills_prompt(self) -> str:
+        """构建完整技能提示词（描述 + 聚合文档）"""
+        sections: List[str] = []
+        for skill_name, metadata in sorted(self.skill_metadata.items()):
+            sections.append(
+                "\n".join([
+                    f"Skill: {metadata.get('name', skill_name)}",
+                    f"Description: {metadata.get('description', '')}",
+                    self.get_skill_prompt_context(skill_name)
+                ]).strip()
+            )
+
+        return "You have access to the following skills:\n\n" + "\n\n".join(sections)
 
     def get_skill_resources(self, skill_name: str) -> Optional[SkillResources]:
         """获取技能资源"""

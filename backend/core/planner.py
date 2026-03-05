@@ -1,5 +1,6 @@
 import json
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict
 
 from capability_orchestration import skill_registry
 from services.llm_service import llm_service
@@ -7,6 +8,8 @@ from services.llm_service import llm_service
 
 class LLMPlanner:
     """LLM 决策层：将用户输入规划为 skill/action/input。"""
+
+    ACTION_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
 
     async def plan(self, user_input: str) -> Dict[str, Any]:
         skills_prompt = skill_registry.build_skills_prompt()
@@ -32,12 +35,7 @@ class LLMPlanner:
             parsed = self._parse_json_block(response)
             if not isinstance(parsed, dict):
                 raise ValueError("planner output is not json object")
-            return {
-                "skill": str(parsed.get("skill", "none")).strip(),
-                "action": str(parsed.get("action", "")).strip(),
-                "input": parsed.get("input", {"user_input": user_input}),
-                "reason": str(parsed.get("reason", "")),
-            }
+            return self._normalize_plan(parsed, user_input)
         except Exception:
             return await self._fallback_plan(user_input)
 
@@ -65,3 +63,30 @@ class LLMPlanner:
             text = text[4:].strip()
 
         return json.loads(text)
+
+    def _normalize_plan(self, raw: Dict[str, Any], user_input: str) -> Dict[str, Any]:
+        skill_name = str(raw.get("skill", "none")).strip() or "none"
+        action = str(raw.get("action", "")).strip()
+        payload = raw.get("input")
+        reason = str(raw.get("reason", "")).strip()
+
+        if not isinstance(payload, dict):
+            payload = {"user_input": user_input}
+
+        payload.setdefault("user_input", user_input)
+
+        if skill_name != "none" and not skill_registry.get_skill_metadata(skill_name):
+            skill_name = "none"
+            action = ""
+            reason = (reason + " | unknown skill downgraded to none").strip(" |")
+
+        if action and not self.ACTION_PATTERN.fullmatch(action):
+            action = ""
+            reason = (reason + " | invalid action ignored").strip(" |")
+
+        return {
+            "skill": skill_name,
+            "action": action,
+            "input": payload,
+            "reason": reason,
+        }

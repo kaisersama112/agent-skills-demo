@@ -15,6 +15,7 @@ class StructuredResponseRenderer:
                 "content": {
                     "status": status,
                     "message": execution.get("message") or "执行失败",
+                    "error_code": execution.get("error_code", "execution_error"),
                     "user_input": user_input,
                     "plan": plan,
                     "execution": execution,

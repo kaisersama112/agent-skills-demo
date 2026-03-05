@@ -41,11 +41,12 @@ class OrchestrationLayersTests(unittest.IsolatedAsyncioTestCase):
     def test_response_renderer_error_shape(self):
         renderer = StructuredResponseRenderer()
         plan = {"skill": "none", "action": "", "input": {}, "reason": "test"}
-        execution = {"status": "error", "message": "未匹配到可执行技能"}
+        execution = {"status": "error", "message": "未匹配到可执行技能", "error_code": "missing_skill"}
 
         result = renderer.render("hi", plan, execution)
         self.assertEqual(result["type"], "json")
         self.assertEqual(result["content"]["status"], "error")
+        self.assertEqual(result["content"]["error_code"], "missing_skill")
         self.assertIn("plan", result["content"])
         self.assertIn("execution", result["content"])
 

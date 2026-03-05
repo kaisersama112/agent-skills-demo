@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from capability_orchestration import skill_registry
 from services.llm_service import llm_service
@@ -11,8 +11,10 @@ class LLMPlanner:
 
     ACTION_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
 
-    async def plan(self, user_input: str) -> Dict[str, Any]:
+    async def plan(self, user_input: str, context: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        context = context or {}
         skills_prompt = skill_registry.build_skills_prompt()
+        history_prompt = self._build_history_prompt(context.get("history", []))
 
         prompt = f"""
 你是一个技能规划器。请根据用户请求和可用技能，输出一个 JSON 对象。
@@ -28,6 +30,7 @@ class LLMPlanner:
 }}
 
 用户请求：{user_input}
+{history_prompt}
 """
 
         try:
@@ -38,6 +41,20 @@ class LLMPlanner:
             return self._normalize_plan(parsed, user_input)
         except Exception:
             return await self._fallback_plan(user_input)
+
+    def _build_history_prompt(self, history: List[Dict[str, Any]]) -> str:
+        if not history:
+            return ""
+
+        recent = history[-6:]
+        lines = ["最近对话上下文（按时间升序）："]
+        for item in recent:
+            sender = item.get("sender", "unknown")
+            content = str(item.get("content", "")).strip()
+            if not content:
+                continue
+            lines.append(f"- {sender}: {content[:300]}")
+        return "\n".join(lines)
 
     async def _fallback_plan(self, user_input: str) -> Dict[str, Any]:
         skill = await skill_registry.select_skill_by_llm(user_input)

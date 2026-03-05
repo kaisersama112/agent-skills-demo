@@ -10,6 +10,33 @@ from datetime import datetime
 router = APIRouter()
 
 
+
+def _safe_message_type(response_type: str) -> MessageType:
+    try:
+        return MessageType(response_type)
+    except Exception:
+        return MessageType.JSON
+
+
+def _build_recent_history(db: Session, session_id: str, limit: int = 8) -> List[dict]:
+    messages = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    items = []
+    for msg in reversed(messages):
+        items.append({
+            "sender": msg.sender,
+            "type": msg.message_type.value,
+            "content": msg.content,
+            "created_at": msg.created_at.isoformat(),
+        })
+    return items
+
+
 @router.post("/queryHistoryChatContent.json")
 async def query_chat_history(
     session_id: str = Query(...),
@@ -78,13 +105,16 @@ async def send_message(
     db.add(user_message)
     
     # 处理消息
-    response = await chat_orchestrator.handle_message(session_id, message)
-    
+    context = {"history": _build_recent_history(db, session_id)}
+    response = await chat_orchestrator.handle_message(session_id, message, context=context)
+
     # 保存系统回复
+    response_type = response.get("type", "json")
+    message_type = _safe_message_type(response_type)
     system_message = ChatMessage(
         session_id=session_id,
-        message_type=MessageType(response["type"]),
-        content=json.dumps(response) if response["type"] != "text" else response["content"],
+        message_type=message_type,
+        content=json.dumps(response, ensure_ascii=False) if message_type != MessageType.TEXT else response.get("content", ""),
         sender="system"
     )
     db.add(system_message)

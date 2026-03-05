@@ -3,24 +3,32 @@ from typing import Any, Dict
 
 
 class StructuredResponseRenderer:
-    """Structured Response Renderer: 统一输出结构化响应。"""
+    """结构化响应层：统一 API 响应格式。"""
 
-    def render(self, plan: Dict[str, Any], execution: Dict[str, Any]) -> Dict[str, Any]:
-        success = bool(execution.get("success"))
-        timestamp = datetime.utcnow().isoformat()
+    def render(self, user_input: str, plan: Dict[str, Any], execution: Dict[str, Any]) -> Dict[str, Any]:
+        status = execution.get("status")
+        response_type = "json"
 
-        if success:
+        if status in {"error", "failed"}:
             return {
-                "type": "json",
-                "content": execution,
-                "plan": plan,
-                "timestamp": timestamp,
+                "type": response_type,
+                "content": {
+                    "status": status,
+                    "message": execution.get("message") or "执行失败",
+                    "user_input": user_input,
+                    "plan": plan,
+                    "execution": execution,
+                },
+                "timestamp": datetime.utcnow().isoformat(),
             }
 
         return {
-            "type": "text",
-            "content": execution.get("message", "执行失败"),
-            "plan": plan,
-            "error": execution,
-            "timestamp": timestamp,
+            "type": response_type,
+            "content": {
+                "status": "success",
+                "user_input": user_input,
+                "plan": plan,
+                "execution": execution,
+            },
+            "timestamp": datetime.utcnow().isoformat(),
         }

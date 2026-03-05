@@ -1,46 +1,67 @@
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, Optional
 
 from capability_orchestration import skill_registry
+from services.llm_service import llm_service
 
 
-class SkillPlanner:
-    """LLM Planner Layer: 负责技能/动作决策。"""
-
-    DEFAULT_ACTIONS = {
-        "pdf": "process",
-        "pptx": "edit",
-        "docx": "comment",
-        "xlsx": "recalc",
-    }
-
-    def _keyword_match_skill(self, user_input: str) -> str | None:
-        lowered = user_input.lower()
-        for meta in skill_registry.list_skills():
-            name = str(meta.get("name", "")).lower()
-            desc = str(meta.get("description", "")).lower()
-            if name and name in lowered:
-                return meta["name"]
-            if any(token for token in lowered.split() if token and token in desc):
-                return meta["name"]
-        return None
+class LLMPlanner:
+    """LLM 决策层：将用户输入规划为 skill/action/input。"""
 
     async def plan(self, user_input: str) -> Dict[str, Any]:
-        """返回结构化执行计划。"""
-        # 当前实现优先稳定性：先走轻量规则匹配，后续可接入真正 tool-calling planner
-        selected_skill = self._keyword_match_skill(user_input)
+        skills_prompt = skill_registry.build_skills_prompt()
 
-        if not selected_skill:
-            skill = await skill_registry.select_skill_by_llm(user_input)
-            selected_skill = skill.name if skill else "chat"
+        prompt = f"""
+你是一个技能规划器。请根据用户请求和可用技能，输出一个 JSON 对象。
 
-        action = self.DEFAULT_ACTIONS.get(selected_skill)
+{skills_prompt}
 
+输出格式（必须是合法 JSON）：
+{{
+  "skill": "技能名称，若无法匹配填 none",
+  "action": "动作名，可为空字符串",
+  "input": {{"user_input": "原始用户输入"}},
+  "reason": "简短原因"
+}}
+
+用户请求：{user_input}
+"""
+
+        try:
+            response = await llm_service.generate(prompt, temperature=0.0)
+            parsed = self._parse_json_block(response)
+            if not isinstance(parsed, dict):
+                raise ValueError("planner output is not json object")
+            return {
+                "skill": str(parsed.get("skill", "none")).strip(),
+                "action": str(parsed.get("action", "")).strip(),
+                "input": parsed.get("input", {"user_input": user_input}),
+                "reason": str(parsed.get("reason", "")),
+            }
+        except Exception:
+            return await self._fallback_plan(user_input)
+
+    async def _fallback_plan(self, user_input: str) -> Dict[str, Any]:
+        skill = await skill_registry.select_skill_by_llm(user_input)
         return {
-            "skill": selected_skill,
-            "action": action,
-            "operation": action,
-            "input": {
-                "user_input": user_input,
-            },
+            "skill": skill.name if skill else "none",
+            "action": "",
+            "input": {"user_input": user_input},
+            "reason": "fallback skill selection",
         }
+
+    def _parse_json_block(self, text: str) -> Dict[str, Any]:
+        text = text.strip()
+
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+
+        if text.startswith("json"):
+            text = text[4:].strip()
+
+        return json.loads(text)

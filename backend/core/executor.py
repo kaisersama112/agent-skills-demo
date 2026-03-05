@@ -4,34 +4,38 @@ from capability_orchestration import skill_registry
 
 
 class CapabilityExecutor:
-    """Capability Execution Layer: 执行技能计划。"""
+    """能力执行层：按 planner 输出路由技能执行。"""
 
-    async def execute(self, session_id: str, plan: Dict[str, Any], context: Dict[str, Any] | None = None) -> Dict[str, Any]:
-        context = context or {}
-        skill_name = plan.get("skill")
-        if not skill_name:
-            return {"success": False, "error": "missing_skill", "message": "计划缺少skill"}
+    async def execute(self, session_id: str, plan: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        skill_name = (plan.get("skill") or "").strip()
+        action = (plan.get("action") or "").strip()
+        payload = dict(plan.get("input") or {})
 
-        action = plan.get("action") or plan.get("operation")
+        if skill_name.lower() in {"", "none"}:
+            return {"status": "error", "message": "未匹配到可执行技能", "skill": "none"}
+
         if action:
-            route_input = {
-                "session_id": session_id,
-                "context": context,
-                "user_input": plan.get("input", {}).get("user_input", ""),
-                "action": action,
-                "operation": action,
-            }
-            routed = skill_registry.execute_skill_action(skill_name, route_input)
-            return {"success": routed.get("status") == "success", "mode": "script", "result": routed}
+            action_payload = dict(payload)
+            action_payload.setdefault("action", action)
+            action_payload.setdefault("session_id", session_id)
+            action_payload.setdefault("context", context)
+            action_payload.setdefault("user_input", payload.get("user_input", ""))
+            return skill_registry.execute_skill_action(skill_name, action_payload)
 
         skill = skill_registry.get_or_create_skill(skill_name)
         if not skill:
-            return {"success": False, "error": "skill_not_found", "message": f"技能不存在: {skill_name}"}
+            return {"status": "error", "message": f"技能不存在: {skill_name}", "skill": skill_name}
 
         skill_input = {
             "session_id": session_id,
-            "user_input": plan.get("input", {}).get("user_input", ""),
+            "user_input": payload.get("user_input", ""),
             "context": context,
         }
-        result = await skill.run(skill_input)
-        return {"success": bool(result.get("success")), "mode": "skill", "result": result}
+        run_result = await skill.run(skill_input)
+
+        return {
+            "status": "success" if run_result.get("success") else "failed",
+            "skill": skill_name,
+            "action": action,
+            "result": run_result,
+        }

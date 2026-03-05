@@ -22,6 +22,12 @@ Do things.
         self.assertEqual(parsed.metadata.license, "Proprietary")
         self.assertIn("Skill body", parsed.body)
 
+    def test_parse_without_frontmatter(self):
+        content = "# no yaml\njust body"
+        parsed = SkillMetadataParser.parse_content_with_body(content)
+        self.assertEqual(parsed.metadata.name, "unknown")
+        self.assertEqual(parsed.body, content)
+
     def test_discover_only_dirs_with_skill_md_and_merge_markdown(self):
         with tempfile.TemporaryDirectory() as tmp:
             valid_skill = os.path.join(tmp, "pdf")
@@ -54,6 +60,34 @@ Main body text.
             full_prompt = registry.build_skills_prompt()
             self.assertIn("Skill: pdf", full_prompt)
             self.assertIn("Description: Use this skill for PDF work.", full_prompt)
+
+    def test_execute_skill_action_routes_to_script(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = os.path.join(tmp, "demo")
+            scripts_dir = os.path.join(skill_dir, "scripts")
+            os.makedirs(scripts_dir)
+
+            with open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as f:
+                f.write("""---
+name: demo
+description: demo
+---
+body
+""")
+
+            with open(os.path.join(scripts_dir, "echo.py"), "w", encoding="utf-8") as f:
+                f.write(
+                    "import sys\n"
+                    "payload = sys.stdin.read()\n"
+                    "print(payload)\n"
+                )
+
+            registry = SkillRegistry()
+            registry.discover_skills(tmp)
+            result = registry.execute_skill_action("demo", {"action": "echo", "x": 1})
+
+            self.assertEqual(result["status"], "success")
+            self.assertIn('"x": 1', result["stdout"])
 
 
 if __name__ == "__main__":

@@ -1,7 +1,5 @@
 import os
 import re
-import json
-import subprocess
 from typing import Dict, List, Optional, Any, Set, Callable
 from pydantic import BaseModel, Field
 from enum import Enum
@@ -388,17 +386,12 @@ class Skill:
         if not self.reference_loader:
             return []
 
-        skill_md_path = os.path.join(self.skill_dir, "SKILL.md")
-        return self.reference_loader.list_referenced_files(skill_md_path)
+        return self.reference_loader.list_referenced_files("SKILL.md")
 
     async def execute(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """执行技能"""
         if self.execute_handler:
             return await self.execute_handler(input_data)
-
-        script_result = self._execute_script_for_action(input_data)
-        if script_result is not None:
-            return script_result
 
         # 默认实现：返回技能信息
         return {
@@ -408,41 +401,6 @@ class Skill:
             "message": "技能执行成功（默认实现）"
         }
 
-    def _execute_script_for_action(self, input_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Claude Skills风格的脚本路由：action/operation -> scripts/<action>.py"""
-        if not self.skill_dir:
-            return None
-
-        action = input_data.get("action") or input_data.get("operation")
-        if not action:
-            return None
-
-        scripts_dir = os.path.join(self.skill_dir, "scripts")
-        script_path = os.path.join(scripts_dir, f"{action}.py")
-        if not os.path.exists(script_path):
-            return {
-                "skill_name": self.name,
-                "action": action,
-                "status": "no_script",
-                "message": f"未找到脚本: scripts/{action}.py"
-            }
-
-        process = subprocess.run(
-            ["python", script_path, json.dumps(input_data, ensure_ascii=False)],
-            capture_output=True,
-            text=True,
-            cwd=self.skill_dir
-        )
-
-        return {
-            "skill_name": self.name,
-            "action": action,
-            "script": f"scripts/{action}.py",
-            "returncode": process.returncode,
-            "stdout": process.stdout,
-            "stderr": process.stderr,
-            "status": "success" if process.returncode == 0 else "failed"
-        }
 
     def get_script(self, name: str) -> Optional[str]:
         """获取脚本内容"""

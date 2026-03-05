@@ -10,29 +10,7 @@ import api.chat as chat_api
 from core.chat_orchestrator import chat_orchestrator
 from main import app
 from models.database import Base
-
-
-class _FakePlanner:
-    async def plan(self, user_input: str):
-        return {
-            "skill": "pdf",
-            "action": "merge",
-            "input": {"user_input": user_input, "files": ["a.pdf", "b.pdf"]},
-            "reason": "integration-test",
-        }
-
-
-class _FakeExecutor:
-    async def execute(self, session_id: str, plan, context):
-        return {
-            "status": "success",
-            "skill": plan["skill"],
-            "action": plan["action"],
-            "script": "scripts/merge.py",
-            "returncode": 0,
-            "stdout": "ok",
-            "stderr": "",
-        }
+from test_fakes import FakePlanner, FakeExecutor
 
 
 class EndToEndUserInputFlowTests(unittest.TestCase):
@@ -55,8 +33,8 @@ class EndToEndUserInputFlowTests(unittest.TestCase):
         # patch orchestrator internals so test starts at HTTP user input but avoids network/script side effects
         self._orig_planner = chat_orchestrator.planner
         self._orig_executor = chat_orchestrator.executor
-        chat_orchestrator.planner = _FakePlanner()
-        chat_orchestrator.executor = _FakeExecutor()
+        chat_orchestrator.planner = FakePlanner()
+        chat_orchestrator.executor = FakeExecutor()
 
         self.client = TestClient(app)
 
@@ -81,6 +59,7 @@ class EndToEndUserInputFlowTests(unittest.TestCase):
         self.assertEqual(payload["data"]["content"]["status"], "success")
         self.assertEqual(payload["data"]["content"]["plan"]["skill"], "pdf")
         self.assertEqual(payload["data"]["content"]["execution"]["script"], "scripts/merge.py")
+        self.assertEqual(payload["data"]["content"]["execution"]["trace_id"], payload["data"]["content"]["trace_id"])
 
         # verify history endpoint sees persisted user/system messages
         history_resp = self.client.post(

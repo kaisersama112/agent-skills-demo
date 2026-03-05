@@ -13,27 +13,7 @@ from core.executor import CapabilityExecutor
 from core.chat_orchestrator import chat_orchestrator
 from main import app
 from models.database import Base
-
-
-class _FakePlanner:
-    async def plan(self, user_input: str):
-        return {
-            "skill": "pdf",
-            "action": "merge",
-            "input": {"user_input": user_input},
-            "reason": "integration-test",
-        }
-
-
-class _FakeExecutor:
-    async def execute(self, session_id: str, plan, context):
-        return {
-            "status": "success",
-            "skill": "pdf",
-            "action": "merge",
-            "script": "scripts/merge.py",
-            "returncode": 0,
-        }
+from test_fakes import FakePlanner, FakeExecutor
 
 
 class ProductionHardeningTests(unittest.TestCase):
@@ -55,8 +35,8 @@ class ProductionHardeningTests(unittest.TestCase):
 
         self._orig_planner = chat_orchestrator.planner
         self._orig_executor = chat_orchestrator.executor
-        chat_orchestrator.planner = _FakePlanner()
-        chat_orchestrator.executor = _FakeExecutor()
+        chat_orchestrator.planner = FakePlanner()
+        chat_orchestrator.executor = FakeExecutor()
 
         self.client = TestClient(app)
 

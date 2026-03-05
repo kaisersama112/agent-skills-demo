@@ -2,34 +2,14 @@ import unittest
 
 from core.chat_orchestrator import ChatOrchestrator
 from core.response_renderer import StructuredResponseRenderer
-
-
-class _FakePlanner:
-    async def plan(self, user_input: str):
-        return {
-            "skill": "pdf",
-            "action": "merge",
-            "input": {"user_input": user_input, "files": ["a.pdf", "b.pdf"]},
-            "reason": "test",
-        }
-
-
-class _FakeExecutor:
-    async def execute(self, session_id: str, plan, context):
-        return {
-            "status": "success",
-            "skill": plan["skill"],
-            "action": plan["action"],
-            "script": "scripts/merge.py",
-            "returncode": 0,
-        }
+from test_fakes import FakePlanner, FakeExecutor
 
 
 class OrchestrationLayersTests(unittest.IsolatedAsyncioTestCase):
     async def test_chat_orchestrator_pipeline_connected(self):
         orchestrator = ChatOrchestrator()
-        orchestrator.planner = _FakePlanner()
-        orchestrator.executor = _FakeExecutor()
+        orchestrator.planner = FakePlanner()
+        orchestrator.executor = FakeExecutor()
 
         result = await orchestrator.handle_message("s1", "合并两个pdf")
 

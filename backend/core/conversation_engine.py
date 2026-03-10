@@ -8,6 +8,8 @@ import uuid
 
 
 class ConversationEngine:
+    CLARIFICATION_CONFIDENCE_THRESHOLD = 0.75
+
     def __init__(self):
         self.intent_prompt = """你是一个意图识别助手。请分析用户输入，识别用户意图并返回JSON格式结果。
 
@@ -18,8 +20,19 @@ class ConversationEngine:
     "intent": "generate_app|chat|query|action",
     "domain": "应用领域（如fitness, finance, education等，可为空）",
     "components": ["需要的UI组件列表，如input_form, chart, calculator等"],
+    "confidence": 0.0,
+    "conflicting_intents": ["可能冲突的意图，可为空"],
+    "needs_clarification": false,
+    "clarification_questions": ["1~3个简短澄清问题"],
     "reason": "意图识别理由"
 }}
+
+规则:
+1. confidence 范围为 0~1。
+2. 当 confidence < 0.75 时，needs_clarification 必须为 true。
+3. 当存在明显多意图冲突（如既要解释概念又要直接产出成品）时，needs_clarification 必须为 true。
+4. 若 needs_clarification 为 true，clarification_questions 必须给出 1~3 个简短问题。
+5. 若 needs_clarification 为 false，clarification_questions 返回空数组。
 
 只返回JSON，不要其他内容。"""
         
@@ -63,10 +76,35 @@ class ConversationEngine:
                 print(f"意图 '{intent_str}' 不在有效列表中，使用默认值 'chat'")
                 intent_str = "chat"
             
+            confidence = float(result.get("confidence", 1.0))
+            confidence = max(0.0, min(1.0, confidence))
+            conflicting_intents = result.get("conflicting_intents", []) or []
+            llm_needs_clarification = bool(result.get("needs_clarification", False))
+            needs_clarification = (
+                confidence < self.CLARIFICATION_CONFIDENCE_THRESHOLD
+                or (isinstance(conflicting_intents, list) and len(conflicting_intents) > 1)
+                or llm_needs_clarification
+            )
+
+            clarification_questions = result.get("clarification_questions", []) or []
+            if not isinstance(clarification_questions, list):
+                clarification_questions = [str(clarification_questions)]
+            clarification_questions = [str(q).strip() for q in clarification_questions if str(q).strip()]
+            clarification_questions = clarification_questions[:3]
+
+            if needs_clarification and not clarification_questions:
+                clarification_questions = [
+                    "你是要我先解释概念，还是直接生成结果？",
+                    "你更希望我输出简要说明，还是一步步执行方案？"
+                ]
+
             intent_result = IntentResult(
                 intent=IntentType(intent_str),
                 domain=result.get("domain"),
                 components=result.get("components", []),
+                confidence=confidence,
+                needs_clarification=needs_clarification,
+                clarification_questions=clarification_questions,
                 raw_output=json.dumps(result)
             )
             print(f"意图检测成功: {intent_result}")
@@ -79,6 +117,11 @@ class ConversationEngine:
                 intent=IntentType.CHAT,
                 domain=None,
                 components=[],
+                confidence=0.0,
+                needs_clarification=True,
+                clarification_questions=[
+                    "我暂时没理解你的需求，可以再具体说明你希望我做什么吗？"
+                ],
                 raw_output=f"Error: {str(e)}"
             )
             print(f"返回错误结果: {error_result}")

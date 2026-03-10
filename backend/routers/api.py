@@ -27,10 +27,18 @@ async def health_check():
 
 @router.post("/generate-app", response_model=StructuredResponse,summary="根据用户意图生成应用")
 async def generate_app(request: GenerateAppRequest):
-    intent_result = await conversation_engine.detect_intent(request.message)
-    
+    intent_result = await conversation_engine.process_message(request.message)
+
+    if intent_result.needs_clarification:
+        builder = ResponseBuilder()
+        builder.add_text("为了更准确地完成你的请求，我需要先确认以下问题：")
+        builder.add_follow_up(intent_result.clarification_questions)
+        if request.session_id:
+            builder.set_session_id(request.session_id)
+        return builder.build()
+
     app = await app_generator.generate_from_intent(intent_result, request.message)
-    
+
     return ResponseBuilder.from_app_generation(
         app_id=app.id,
         name=app.spec.name,
@@ -92,12 +100,23 @@ async def generate_multimodal(request: ChatRequest):
     
     # 检测意图
     print(f"\n=== 步骤1: 检测用户意图 ===")
-    intent_result = await conversation_engine.detect_intent(request.message)
+    intent_result = await conversation_engine.process_message(request.message, session)
     print(f"意图检测结果: {intent_result}")
     print(f"识别的意图: {intent_result.intent.value}")
     print(f"领域: {intent_result.domain}")
     print(f"组件: {intent_result.components}")
     print(f"原始输出: {intent_result.raw_output}")
+
+    if intent_result.needs_clarification:
+        print(f"\n=== 步骤2: 进入澄清流程（跳过任务规划） ===")
+        builder = ResponseBuilder()
+        builder.set_session_id(session_id)
+        builder.add_text("为了更准确地执行你的需求，我需要先确认几个问题：")
+        builder.add_follow_up(intent_result.clarification_questions)
+        response = builder.build()
+        print(f"澄清问题: {intent_result.clarification_questions}")
+        print(f"=== 处理完成 ===\n")
+        return response
     
     # 创建执行计划
     print(f"\n=== 步骤2: 创建执行计划 ===")

@@ -38,6 +38,9 @@ class IntentResult(BaseModel):
     intent: IntentType
     domain: Optional[str] = None
     components: List[str] = Field(default_factory=list)
+    confidence: float = 1.0
+    needs_clarification: bool = False
+    clarification_questions: List[str] = Field(default_factory=list)
     raw_output: Optional[str] = None
 
 
